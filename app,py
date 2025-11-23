@@ -1,1 +1,656 @@
+# app.py
+# Cyber-Tech Themed Device Tracker (full script)
+# - Animated "cyber" login UI
+# - Animated dashboard with device cards + Leaflet map
+# - Session-based auth (no headers)
+# - /api/devices endpoint for live JSON updates (polled by the dashboard)
+#
+# NOTE: change SECRET_KEY and consider HTTPS for production.
 
+from flask import Flask, request, Response, session, redirect, url_for, jsonify
+from flask_cors import CORS
+from datetime import datetime
+import sqlite3
+import functools
+import json
+import os
+
+PASSWORD = "trackergizo1"
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "SUPER_SECRET_KEY_CHANGE_THIS")
+CORS(app)
+
+
+# -------------------------
+# Initialize Database
+# -------------------------
+def init_db():
+    conn = sqlite3.connect("locations.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time TEXT,
+            lat REAL,
+            lon REAL,
+            device TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+# -------------------------
+# Auth decorator (session)
+# -------------------------
+def require_password(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login"))
+        return func(*args, **kwargs)
+    return wrapper
+
+
+# -------------------------
+# Login Page (Cyber Tech UI)
+# -------------------------
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        if request.form.get("password") == PASSWORD:
+            session["logged_in"] = True
+            return redirect("/dashboard")
+        # simple failure response (could be improved)
+        return """
+            <script>
+                alert('Wrong password');
+                window.location.href = '/login';
+            </script>
+        """
+
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Access Portal</title>
+<style>
+  :root{
+    --bg1:#05060a; --bg2:#0b0f1a;
+    --accent:#00ffd5; --accent2:#6cff00;
+    --glass: rgba(255,255,255,0.03);
+  }
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{
+    background:
+      radial-gradient(1200px 600px at 10% 20%, rgba(0,255,213,0.03), transparent 6%),
+      radial-gradient(900px 400px at 90% 80%, rgba(108,255,192,0.02), transparent 6%),
+      linear-gradient(180deg,var(--bg1), var(--bg2));
+    display:flex;align-items:center;justify-content:center;
+    color:#cdebf3;
+    overflow:hidden;
+  }
+
+  /* animated grid */
+  .grid {
+    position:absolute; inset:0; opacity:0.06;
+    background-image:
+      linear-gradient(transparent 95%, rgba(0,255,213,0.08) 96%),
+      linear-gradient(90deg, transparent 95%, rgba(0,255,213,0.04) 96%);
+    background-size: 30px 30px, 30px 30px;
+    transform: skewY(-6deg);
+    animation: gridShift 20s linear infinite;
+  }
+  @keyframes gridShift {
+    from { background-position: 0 0, 0 0; }
+    to { background-position: 900px 0, 0 900px; }
+  }
+
+  .card {
+    position:relative;
+    width: 420px;
+    max-width:95%;
+    border-radius:16px;
+    padding:34px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    box-shadow: 0 10px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.02);
+    border: 1px solid rgba(0,255,213,0.06);
+    backdrop-filter: blur(8px) saturate(120%);
+    color:#bfeef0;
+    transform: translateY(0);
+    animation: floaty 6s ease-in-out infinite;
+  }
+  @keyframes floaty {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-8px); }
+    100% { transform: translateY(0px); }
+  }
+
+  h1{
+    margin:0 0 8px 0;
+    font-size:20px;
+    letter-spacing:1px;
+    color: #91fff1;
+    text-shadow: 0 0 12px rgba(0,255,213,0.12);
+  }
+  p.sub { margin:0 0 18px 0; color:#93f7e9; opacity:0.7; font-size:13px; }
+
+  .input {
+    display:flex; gap:8px;
+    margin-top:6px;
+  }
+  input[type=password]{
+    flex:1;
+    padding:12px 14px;
+    border-radius:10px;
+    border: 1px solid rgba(255,255,255,0.03);
+    background: rgba(255,255,255,0.015);
+    color:#dffaf6;
+    outline:none;
+    font-size:15px;
+    box-shadow: inset 0 -2px 8px rgba(0,0,0,0.5);
+  }
+  button {
+    padding:12px 16px;
+    border-radius:10px;
+    background: linear-gradient(90deg, rgba(0,255,213,0.15), rgba(108,255,192,0.08));
+    color:var(--accent);
+    border:1px solid rgba(0,255,213,0.12);
+    cursor:pointer;
+    font-weight:600;
+    letter-spacing:0.6px;
+  }
+  button:hover { transform: translateY(-3px); box-shadow: 0 8px 30px rgba(0,255,213,0.06); }
+
+  .foot { margin-top:12px; font-size:12px; color:#7ee6d9; opacity:0.75; }
+  .logo {
+    width:56px;height:56px;border-radius:12px;margin-bottom:18px;
+    background: linear-gradient(135deg, rgba(0,255,213,0.12), rgba(108,255,192,0.06));
+    display:flex;align-items:center;justify-content:center;border:1px solid rgba(0,255,213,0.08);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02);
+  }
+  .logo svg { filter: drop-shadow(0 4px 12px rgba(0,255,213,0.06)); }
+
+  /* small screens */
+  @media (max-width:480px){
+    .card { padding:22px; }
+    h1 {font-size:18px;}
+  }
+
+  /* animated scanline */
+  .scanline {
+    position:absolute; left:-20%; right:-20%; height:2px;
+    top:50%; transform:skewX(-20deg);
+    background: linear-gradient(90deg, transparent, rgba(0,255,213,0.06), transparent);
+    animation: scan 3.5s linear infinite;
+    pointer-events:none;
+    mix-blend-mode: screen;
+  }
+  @keyframes scan { 0% { left:-30%; } 100% { left:130%; } }
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+
+  <div class="card" role="main" aria-labelledby="title">
+    <div style="display:flex;gap:12px;align-items:center;">
+      <div class="logo" aria-hidden="true">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 12h18" stroke="#00ffd5" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M7 7v10" stroke="#6cff00" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M17 7v10" stroke="#6cff00" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div>
+        <h1 id="title">Secure Device Portal</h1>
+        <p class="sub">Authorized access only — device telemetry console</p>
+      </div>
+    </div>
+
+    <form method="POST" style="margin-top:18px;">
+      <div class="input">
+        <input type="password" name="password" placeholder="Enter access key" required />
+        <button type="submit">Enter</button>
+      </div>
+    </form>
+
+    <div class="foot">This system tracks consenting devices only. Keep credentials safe.</div>
+  </div>
+
+  <div class="scanline" aria-hidden="true"></div>
+</body>
+</html>
+"""
+
+
+# -------------------------
+# Logout
+# -------------------------
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
+
+# -------------------------
+# Tracking page for devices (phone)
+# -------------------------
+tracking_page = """
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Share Location</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#0b0f1a;color:#d7ffff;padding:20px}
+    .btn{background:#00ffd5;color:#001;border:none;padding:12px 18px;border-radius:10px;cursor:pointer}
+    .hint{opacity:0.8;font-size:13px;margin-top:10px}
+  </style>
+</head>
+<body>
+  <h2>Share My Location</h2>
+  <button class="btn" onclick="start()">Start Sharing</button>
+  <p class="hint">Allow browser to access location. Keep this tab open to continue sharing.</p>
+
+<script>
+function start() {
+  if (!navigator.geolocation) { alert('Geolocation not supported'); return; }
+  navigator.geolocation.watchPosition(pos => {
+      fetch('/report', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+              device: navigator.userAgent
+          })
+      }).catch(e => console.error('send failed', e));
+  }, err => alert('Location error: ' + err.message), {enableHighAccuracy: true, maximumAge: 1000});
+}
+</script>
+</body>
+</html>
+"""
+
+
+@app.route('/')
+def index():
+    return tracking_page
+
+
+# -------------------------
+# Receive reports
+# -------------------------
+@app.route('/report', methods=['POST'])
+def report():
+    data = request.get_json()
+    if not data or "lat" not in data or "lon" not in data:
+        return Response("Bad Request", status=400)
+    try:
+        conn = sqlite3.connect("locations.db")
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO logs (time, lat, lon, device) VALUES (?, ?, ?, ?)",
+            (datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+             float(data["lat"]), float(data["lon"]), data.get("device", "Unknown")))
+        conn.commit()
+    except Exception as e:
+        print("DB error:", e)
+        return Response("Server Error", status=500)
+    finally:
+        conn.close()
+    return "OK"
+
+
+# -------------------------
+# API: latest devices (JSON)
+# -------------------------
+@app.route('/api/devices')
+@require_password
+def api_devices():
+    """
+    Returns JSON array of latest record per device:
+    [{ "device": str, "lat": float, "lon": float, "time": str, "id": int }, ...]
+    """
+    conn = sqlite3.connect("locations.db")
+    c = conn.cursor()
+    # Get latest row id per device, then fetch those rows
+    c.execute("""
+        SELECT l.id, l.device, l.lat, l.lon, l.time
+        FROM logs l
+        INNER JOIN (
+            SELECT device, MAX(id) as maxid FROM logs GROUP BY device
+        ) mx ON l.device = mx.device AND l.id = mx.maxid
+        ORDER BY l.time DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0],
+            "device": r[1],
+            "lat": r[2],
+            "lon": r[3],
+            "time": r[4]
+        })
+    return jsonify(out)
+
+
+# -------------------------
+# Dashboard page (Cyber Tech UI)
+# -------------------------
+@app.route('/dashboard')
+@require_password
+def dashboard():
+    # Dashboard HTML uses /api/devices to fetch live data
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Cyber Device Dashboard</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+  :root{
+    --bg:#050712; --panel: rgba(255,255,255,0.02);
+    --accent:#00ffd5; --accent2:#6cff00; --text:#bfeef0;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;color:var(--text);background:radial-gradient(800px 400px at 10% 10%, rgba(0,255,213,0.02), transparent), linear-gradient(180deg,#04060a,#071022);}
+  .wrap{display:grid;grid-template-columns: 360px 1fr; gap:18px; padding:20px; height:100vh; box-sizing:border-box;}
+  /* left pane */
+  .left {
+    border-radius:14px; padding:18px; background:var(--panel); border:1px solid rgba(0,255,213,0.06); box-shadow: 0 12px 40px rgba(0,0,0,0.6); overflow:auto;
+  }
+  .brand { display:flex; gap:12px; align-items:center; margin-bottom:12px;}
+  .brand .icon { width:48px;height:48px;border-radius:10px;background:linear-gradient(135deg, rgba(0,255,213,0.12), rgba(108,255,192,0.06)); display:flex;align-items:center;justify-content:center; border:1px solid rgba(0,255,213,0.08); }
+  .brand h2{margin:0;font-size:18px;color:#aefcee}
+  .meta{font-size:13px; color:#8fe6d9; opacity:0.8;}
+
+  .search { margin-top:12px; display:flex; gap:8px; }
+  .search input{flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.02); background:rgba(255,255,255,0.01); color:var(--text);}
+
+  .devices { margin-top:14px; display:flex; flex-direction:column; gap:10px; }
+  .device {
+    background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.008));
+    border-radius:12px; padding:12px; border:1px solid rgba(0,255,213,0.03);
+    display:flex; justify-content:space-between; align-items:center; gap:10px; transform-origin:center;
+    transition: transform 220ms ease, box-shadow 220ms ease;
+  }
+  .device:hover { transform: translateX(6px); box-shadow: 0 8px 30px rgba(0,255,213,0.03); }
+  .dev-info { display:flex; gap:10px; align-items:center; }
+  .pulse {
+    width:14px;height:14px;border-radius:50%; background:var(--accent); box-shadow:0 0 10px rgba(0,255,213,0.12);
+    position:relative;
+  }
+  .pulse::after{
+    content:""; position:absolute; inset:-6px; border-radius:50%; background:transparent; box-shadow:0 0 12px rgba(0,255,213,0.06); animation: pulse 1.8s infinite;
+  }
+  @keyframes pulse { 0%{ transform:scale(0.8); opacity:1 } 70%{ transform:scale(1.8); opacity:0 } 100%{opacity:0} }
+
+  .dev-meta { font-size:13px; color:#dffdf7; opacity:0.95; }
+  .dev-time { font-size:12px; color:#8fe6d9; opacity:0.8; }
+
+  .btn {
+    background:transparent;border:1px solid rgba(255,255,255,0.03); padding:8px 10px;border-radius:8px;color:var(--accent);cursor:pointer;
+  }
+
+  /* right pane */
+  .right { border-radius:14px; overflow:hidden; position:relative; }
+  #map { height:100%; width:100%; }
+
+  /* top overlay on map */
+  .map-top {
+    position:absolute; top:16px; left:50%; transform:translateX(-50%); z-index:4000;
+    background: linear-gradient(90deg, rgba(0,0,0,0.25), rgba(255,255,255,0.01));
+    padding:8px 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.03);
+    color:#cfeee8; display:flex; gap:12px; align-items:center;
+  }
+
+  .legend { font-size:13px; color:#9fe6d7; opacity:0.95; }
+
+  /* subtle entrance animation for device cards */
+  .device { opacity:0; transform: translateX(-6px); animation: fadeInCard 0.5s forwards ease; }
+  .device:nth-child(1){ animation-delay:0.05s }
+  .device:nth-child(2){ animation-delay:0.12s }
+  .device:nth-child(3){ animation-delay:0.18s }
+  .device:nth-child(4){ animation-delay:0.24s }
+  @keyframes fadeInCard { to { opacity:1; transform: translateX(0); } }
+
+  /* small screens */
+  @media (max-width:900px){
+    .wrap{grid-template-columns: 1fr; grid-auto-rows: auto 1fr; padding:12px;}
+    .left{order:2;height:40vh;}
+    .right{order:1;height:60vh;}
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="left" role="complementary">
+      <div class="brand">
+        <div class="icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M3 12h18" stroke="#00ffd5" stroke-width="1.2" stroke-linecap="round"/>
+            <path d="M7 7v10" stroke="#6cff00" stroke-width="1.2" stroke-linecap="round"/>
+            <path d="M17 7v10" stroke="#6cff00" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <h2>CYBER TRACK</h2>
+          <div class="meta">Live device telemetry • Animated dashboard</div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+        <div class="meta">Devices</div>
+        <div><a href="/logout" class="btn">Logout</a></div>
+      </div>
+
+      <div class="search">
+        <input id="search" placeholder="Filter devices by name..." />
+      </div>
+
+      <div id="devices" class="devices" aria-live="polite" style="margin-top:12px;">
+        <!-- device cards inserted here -->
+      </div>
+    </div>
+
+    <div class="right" role="main">
+      <div id="map"></div>
+      <div class="map-top">
+        <div class="legend">● Active</div>
+        <div style="width:10px"></div>
+        <div class="legend" id="last-updated">Last updated: --</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Map init
+  const map = L.map('map', { zoomControl: true }).setView([0,0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  // Use a custom divIcon for cyber pulse markers
+  function createPulseIcon(){
+    const html = `<div style="
+      width:18px;height:18px;border-radius:50%;
+      background: radial-gradient(circle at 40% 30%, rgba(255,255,255,0.2), rgba(0,255,213,1) 30%, rgba(0,255,213,0.2) 60%);
+      box-shadow:0 0 18px rgba(0,255,213,0.25);
+      border:1px solid rgba(255,255,255,0.06);
+      "></div>`;
+    return L.divIcon({ html: html, className: '', iconSize: [18,18], iconAnchor: [9,9] });
+  }
+
+  let markers = {}; // device -> marker
+
+  // fetch and render devices
+  async function fetchDevices(){
+    try {
+      const res = await fetch('/api/devices');
+      if (!res.ok) {
+        console.error('Failed to fetch devices', res.status);
+        return;
+      }
+      const data = await res.json();
+      updateUI(data);
+    } catch (e) {
+      console.error('Fetch error', e);
+    }
+  }
+
+  function prettyTime(t){
+    if(!t) return '--';
+    const d = new Date(t + 'Z'); // input stored in UTC
+    return d.toLocaleString();
+  }
+
+  function updateUI(devices){
+    const container = document.getElementById('devices');
+    const searchQ = document.getElementById('search').value.toLowerCase().trim();
+
+    // Build a map of existing device ids for cleanup
+    const seen = new Set();
+
+    // Sort devices by time descending
+    devices.sort((a,b) => (b.time || '').localeCompare(a.time || ''));
+
+    // Update last-updated display
+    document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+
+    // Iterate devices and update cards + markers
+    devices.forEach(dev => {
+      if (searchQ && !dev.device.toLowerCase().includes(searchQ)) return;
+      seen.add(dev.device);
+
+      // update/create marker
+      const lat = parseFloat(dev.lat);
+      const lon = parseFloat(dev.lon);
+      if (!isFinite(lat) || !isFinite(lon)) return;
+
+      if (markers[dev.device]) {
+        // animate movement by setting new latlng
+        markers[dev.device].setLatLng([lat, lon]);
+      } else {
+        const m = L.marker([lat, lon], { icon: createPulseIcon() }).addTo(map);
+        m.bindPopup(`<b>${escapeHtml(dev.device)}</b><br>${prettyTime(dev.time)}`);
+        markers[dev.device] = m;
+      }
+
+      // create/update card
+      let card = document.querySelector(`[data-device="${cssEscape(dev.device)}"]`);
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'device';
+        card.setAttribute('data-device', dev.device);
+        card.innerHTML = `
+          <div class="dev-info">
+            <div class="pulse" aria-hidden="true"></div>
+            <div>
+              <div class="dev-meta device-name">${escapeHtml(dev.device)}</div>
+              <div class="dev-time">ID: ${dev.id} • ${prettyTime(dev.time)}</div>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div class="dev-meta">Lat: ${lat.toFixed(5)}</div>
+            <div class="dev-meta">Lon: ${lon.toFixed(5)}</div>
+            <div style="margin-top:6px;"><button class="btn" onclick="centerDevice('${escapeJs(dev.device)}')">Center</button></div>
+          </div>
+        `;
+        container.appendChild(card);
+      } else {
+        // update contents smoothly
+        card.querySelector('.dev-time').textContent = `ID: ${dev.id} • ${prettyTime(dev.time)}`;
+        card.querySelector('.dev-meta').textContent = `${escapeHtml(dev.device)}`;
+        const rights = card.querySelectorAll('.dev-meta');
+        // update lat/lon (right-hand group)
+        const metas = card.querySelectorAll('div.dev-meta');
+        // simple approach: update text nodes in right area
+        const rightArea = card.querySelectorAll('div')[2];
+        if (rightArea) {
+          rightArea.querySelector('.dev-meta')?.remove?.();
+        }
+        // instead, replace right-hand column
+        const latLonHtml = `
+            <div class="dev-meta">Lat: ${lat.toFixed(5)}</div>
+            <div class="dev-meta">Lon: ${lon.toFixed(5)}</div>
+            <div style="margin-top:6px;"><button class="btn" onclick="centerDevice('${escapeJs(dev.device)}')">Center</button></div>
+        `;
+        // set last child (right column)
+        const children = card.children;
+        if (children.length >= 2) {
+          children[1].innerHTML = latLonHtml;
+        }
+      }
+    });
+
+    // remove cards for devices not in 'seen'
+    Array.from(container.children).forEach(c => {
+      const d = c.getAttribute('data-device');
+      if (!seen.has(d)) {
+        c.remove();
+        // optionally remove marker from map
+        if (markers[d]) {
+          map.removeLayer(markers[d]);
+          delete markers[d];
+        }
+      }
+    });
+
+    // if there are markers, set view to the most recent device
+    const deviceList = devices.filter(d => !searchQ || d.device.toLowerCase().includes(searchQ));
+    if (deviceList.length > 0) {
+      const first = deviceList[0];
+      if (isFinite(parseFloat(first.lat)) && isFinite(parseFloat(first.lon))) {
+        // smooth fly
+        map.flyTo([parseFloat(first.lat), parseFloat(first.lon)], 13, { duration: 1.2 });
+      }
+    }
+  }
+
+  // helper to center map on a device when button clicked
+  function centerDevice(name){
+    const m = markers[name];
+    if (m) {
+      map.flyTo(m.getLatLng(), 15, { duration: 0.9 });
+      m.openPopup();
+    } else {
+      alert('Device marker not found');
+    }
+  }
+
+  // simple escaping helpers
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, function(m){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+  function cssEscape(s){ return s.replace(/["'\\]/g, ''); }
+  function escapeJs(s){ return s.replace(/'/g, "\\'").replace(/"/g, '\\"'); }
+
+  // search filter
+  document.getElementById('search').addEventListener('input', () => fetchDevices());
+
+  // initial load + polling
+  fetchDevices();
+  setInterval(fetchDevices, 3000);
+</script>
+</body>
+</html>
+    """
+
+
+# -------------------------
+# Run
+# -------------------------
+if __name__ == "__main__":
+    # debug True is convenient for dev; remove in production
+    app.run(host="0.0.0.0", port=5000, debug=True)
